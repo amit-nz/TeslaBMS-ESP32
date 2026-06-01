@@ -184,6 +184,96 @@ bool BMSModule::readModuleValues()
     return retVal;
 }
 
+// bool BMSModule::readModuleValues()
+// {
+//     uint8_t payload[4];
+//     uint8_t buff[50];
+//     uint8_t calcCRC;
+//     bool retVal = false;
+//     int retLen;
+//     float tempCalc;
+//     float tempTemp;
+
+//     int retries = 3;  // Set the maximum number of retries
+
+//     for (int attempt = 0; attempt < retries; attempt++) {
+//         payload[0] = moduleAddress << 1;
+
+//         readStatus();
+//         Logger::debug("Module %i   alerts=%X   faults=%X   COV=%X   CUV=%X", moduleAddress, alerts, faults, COVFaults, CUVFaults);
+
+//         payload[1] = REG_ADC_CTRL;
+//         payload[2] = 0b00111101; //ADC Auto mode, read every ADC input we can (Both Temps, Pack, 6 cells)
+//         BMSUtil::sendDataWithReply(payload, 3, true, buff, 3);
+
+//         payload[1] = REG_IO_CTRL;
+//         payload[2] = 0b00000011; //enable temperature measurement VSS pins
+//         BMSUtil::sendDataWithReply(payload, 3, true, buff, 3);
+
+//         payload[1] = REG_ADC_CONV; //start all ADC conversions
+//         payload[2] = 1;
+//         BMSUtil::sendDataWithReply(payload, 3, true, buff, 3);
+
+//         payload[1] = REG_GPAI; //start reading registers at the module voltage registers
+//         payload[2] = 0x12; //read 18 bytes (Each value takes 2 - ModuleV, CellV1-6, Temp1, Temp2)
+//         retLen = BMSUtil::sendDataWithReply(payload, 3, false, buff, 22);
+
+//         calcCRC = BMSUtil::genCRC(buff, retLen-1);
+//         Logger::debug("Sent CRC: %x     Calculated CRC: %x", buff[21], calcCRC);
+
+//         if ( (retLen == 22) && (buff[21] == calcCRC) ) {
+//             if (buff[0] == (moduleAddress << 1) && buff[1] == REG_GPAI && buff[2] == 0x12) // Also ensure this is actually the reply to our intended query
+//             {
+//                 // Process the valid response
+//                 moduleVolt = (buff[3] * 256 + buff[4]) * 0.002034609f;
+//                 if (moduleVolt > highestModuleVolt) highestModuleVolt = moduleVolt;
+//                 if (moduleVolt < lowestModuleVolt) lowestModuleVolt = moduleVolt;            
+//                 for (int i = 0; i < 6; i++) {
+//                     cellVolt[i] = (buff[5 + (i * 2)] * 256 + buff[6 + (i * 2)]) * 0.000381493f;
+//                     if (lowestCellVolt[i] > cellVolt[i]) lowestCellVolt[i] = cellVolt[i];
+//                     if (highestCellVolt[i] < cellVolt[i]) highestCellVolt[i] = cellVolt[i];
+//                 }
+
+//                 // Now using steinhart/hart equation for temperatures. We'll see if it is better than old code.
+//                 tempTemp = (1.78f / ((buff[17] * 256 + buff[18] + 2) / 33046.0f) - 3.57f);
+//                 tempTemp *= 1000.0f;
+//                 tempCalc =  1.0f / (0.0007610373573f + (0.0002728524832 * logf(tempTemp)) + (powf(logf(tempTemp), 3) * 0.0000001022822735f));            
+//                 temperatures[0] = tempCalc - 273.15f;             // Convert from Kelvin to Celsius
+
+//                 tempTemp = 1.78f / ((buff[19] * 256 + buff[20] + 9) / 33068.0f) - 3.57f;
+//                 tempTemp *= 1000.0f;
+//                 tempCalc = 1.0f / (0.0007610373573f + (0.0002728524832 * logf(tempTemp)) + (powf(logf(tempTemp), 3) * 0.0000001022822735f));
+//                 temperatures[1] = tempCalc - 273.15f;  // Convert from Kelvin to Celsius
+
+//                 if (getLowTemp() < lowestTemperature) lowestTemperature = getLowTemp();
+//                 if (getHighTemp() > highestTemperature) highestTemperature = getHighTemp();
+
+//                 Logger::debug("Got voltage and temperature readings");
+//                 goodPackets++;
+//                 retVal = true;
+//                 break; // Exit the retry loop after successfully reading the module
+//             }
+//         }
+//         else
+//         {
+//             Logger::error("Invalid module response received for module %i  len: %i   crc: %i   calc: %i", 
+//                           moduleAddress, retLen, buff[21], calcCRC);
+//             badPackets++;
+//         }
+
+//         if (attempt < retries - 1) {
+//             Logger::debug("Retrying reading module %i... Attempt %d/%d", moduleAddress, attempt + 1, retries);
+//             delay(100);  // Add a small delay before retrying (optional)
+//         }
+//     }
+
+//     Logger::debug("Good RX: %d       Bad RX: %d", goodPackets, badPackets);
+
+//     return retVal;
+// }
+
+
+
 float BMSModule::getCellVoltage(int cell)
 {
     if (cell < 0 || cell > 5) return 0.0f;
@@ -292,11 +382,15 @@ void BMSModule::setExists(bool ex)
     exists = ex;
 }
 
+/* old method
 void BMSModule::balanceCells(float lowestCell)
 {
     uint8_t payload[4];
     uint8_t buff[30];
     uint8_t balance = 0;//bit 0 - 5 are to activate cell balancing 1-6
+
+    // Define the balance time in minutes as a constant
+    // const int balanceMinutes = 30;  // Set to 30 minutes as the constant balance time
 
     payload[0] = moduleAddress << 1;
     payload[1] = REG_BAL_CTRL;
@@ -310,12 +404,20 @@ void BMSModule::balanceCells(float lowestCell)
     
         //if ( (balanceState[i] == 0) && (getCellVoltage(i) > settings.balanceVoltage) ) balanceState[i] = 1;
 
-        //if ( /*(balanceState[i] == 1) &&*/ (getCellVoltage(i) < (settings.balanceVoltage - settings.balanceHyst)) ) balanceState[i] = 0;
+        //if ( /*(balanceState[i] == 1) && (getCellVoltage(i) < (settings.balanceVoltage - settings.balanceHyst)) ) balanceState[i] = 0;
 
         //Logger::info("Low Cell voltage after passing is: %f", lowestCell);
         //Logger::error("Low Cell/Current Cell: %fV / %fV", lowestCell, getCellVoltage(i));
+        // Serial.println("Cell voltage " + String(getCellVoltage(i)));
+        // Serial.println("Balance voltage " + String(settings.balanceVoltage));
+        // Serial.println("Balance hyst " + String(settings.balanceHyst));
+        // Serial.println("Low Cell with hyst " + String(lowestCell + settings.balanceHyst));
+        // Serial.println("Balance state " + String(balanceState[i]));
+        // Serial.println(getCellVoltage(i) > settings.balanceVoltage);
+        // Serial.println((lowestCell + settings.balanceHyst) <= getCellVoltage(i));
+        
         if ( (balanceState[i] == 0) && (getCellVoltage(i) > settings.balanceVoltage) && ((lowestCell + settings.balanceHyst) <= getCellVoltage(i)) ) balanceState[i] = 1;
-        if ( /*(balanceState[i] == 1) &&*/ (getCellVoltage(i) < (lowestCell + settings.balanceHyst)) ) balanceState[i] = 0;
+        if ( /*(balanceState[i] == 1) && (getCellVoltage(i) < (lowestCell + settings.balanceHyst)) ) balanceState[i] = 0;
 
         if (balanceState[i] == 1) balance |= (1<<i);
     }
@@ -356,6 +458,158 @@ void BMSModule::balanceCells(float lowestCell)
         }
     }
 }
+*/
+void BMSModule::balanceCells(float lowestCell)
+{
+    uint8_t payload[4];
+    uint8_t buff[30];
+    uint8_t balance = 0; // Bit 0 - 5 activate cell balancing 1-6
+
+    payload[0] = moduleAddress << 1;
+    payload[1] = REG_BAL_CTRL;
+    payload[2] = 0; // Reset balance time
+    BMSUtil::sendData(payload, 3, true);
+    delay(2);
+    BMSUtil::getReply(buff, 30);
+
+    for (int i = 0; i < 6; i++)
+    {
+        float cellVoltage = getCellVoltage(i);
+
+        // Only allow balancing if the cell is ABOVE settings.balanceVoltage
+        if (cellVoltage > settings.balanceVoltage && cellVoltage >= (lowestCell + settings.balanceHyst))
+        {
+            balanceState[i] = 1;
+        }
+        else
+        {
+            balanceState[i] = 0;
+        }
+
+        if (balanceState[i] == 1)
+        {
+            balance |= (1 << i);
+        }
+    }
+
+    if (balance != 0) // Only send balance command when needed
+    {
+        payload[0] = moduleAddress << 1;
+        payload[1] = REG_BAL_TIME;
+        payload[2] = 0x82; // Balance for two minutes
+        BMSUtil::sendData(payload, 3, true);
+        delay(2);
+        BMSUtil::getReply(buff, 30);
+
+        payload[0] = moduleAddress << 1;
+        payload[1] = REG_BAL_CTRL;
+        payload[2] = balance; // Write balance state to register
+        BMSUtil::sendData(payload, 3, true);
+        delay(2);
+        BMSUtil::getReply(buff, 30);
+
+        if (Logger::isDebug()) // Read back registers for verification
+        {
+            Logger::debug("Reading back balancing registers:");
+            delay(50);
+            payload[0] = moduleAddress << 1;
+            payload[1] = REG_BAL_TIME;
+            payload[2] = 1;
+            BMSUtil::sendData(payload, 3, false);
+            delay(2);
+            BMSUtil::getReply(buff, 30);
+
+            payload[0] = moduleAddress << 1;
+            payload[1] = REG_BAL_CTRL;
+            payload[2] = 1;
+            BMSUtil::sendData(payload, 3, false);
+            delay(2);
+            BMSUtil::getReply(buff, 30);
+        }
+    }
+}
+
+void BMSModule::balanceCell(int cellNumber)
+{
+    uint8_t payload[4];
+    uint8_t buff[30];
+    uint8_t cellMask = 0;  // Mask to toggle the specific cell's balancing state
+
+    // Define the balance time in minutes as a constant
+    const int balanceMinutes = 30;  // Set to 30 minutes as the constant balance time
+
+    // Check that cellNumber is between 1 and 6
+    if (cellNumber < 1 || cellNumber > 6) {
+        Logger::debug("Invalid cell number. Must be between 1 and 6.");
+        return;
+    }
+
+    // Toggle the balancing state of the specified cell
+    if (balanceState[cellNumber - 1] == 0) {
+        balanceState[cellNumber - 1] = 1;  // Turn balancing on
+        Logger::console("Turning balancing ON for cell #%i for %i minutes", cellNumber, balanceMinutes);
+    } else {
+        balanceState[cellNumber - 1] = 0;  // Turn balancing off
+        Logger::console("Turning balancing OFF for %i", cellNumber);
+    }
+
+    // Build the cell balancing mask (set bit for the selected cell)
+    for (int i = 0; i < 6; i++) {
+        if (balanceState[i] == 1) {
+            cellMask |= (1 << i);  // Set the bit corresponding to the cell
+        }
+    }
+
+    // Calculate the balance time in the register based on the constant balanceMinutes
+    uint8_t balanceTime = balanceMinutes * 60 / 2;  // Assuming the register increments in 2-second steps
+    if (balanceTime > 0xFF) balanceTime = 0xFF; // Limit to 255 (max value for 1 byte)
+
+    // Send the data to reset balancing time first
+    payload[0] = moduleAddress << 1;
+    payload[1] = REG_BAL_CTRL;
+    payload[2] = 0; // Writing zero to this register resets balance time
+    BMSUtil::sendData(payload, 3, true);
+    delay(2);
+    BMSUtil::getReply(buff, 30);
+
+    // Send balance time configuration
+    payload[0] = moduleAddress << 1;
+    payload[1] = REG_BAL_TIME;
+    payload[2] = balanceTime;
+    BMSUtil::sendData(payload, 3, true);
+    delay(2);
+    BMSUtil::getReply(buff, 30);
+
+    // Only send balance command when needed (i.e., when cell balancing is enabled)
+    if (cellMask != 0) {
+        payload[0] = moduleAddress << 1;
+        payload[1] = REG_BAL_CTRL;
+        payload[2] = cellMask;  // Write the balancing state mask to the register
+        BMSUtil::sendData(payload, 3, true);
+        delay(2);
+        BMSUtil::getReply(buff, 30);
+
+        // Optionally read back the registers for debugging
+        if (Logger::isDebug()) {
+            Logger::debug("Reading back balancing registers:");
+            delay(50);
+            payload[0] = moduleAddress << 1;
+            payload[1] = REG_BAL_TIME;
+            payload[2] = 1; // Expecting only 1 byte back
+            BMSUtil::sendData(payload, 3, false);
+            delay(2);
+            BMSUtil::getReply(buff, 30);
+
+            payload[0] = moduleAddress << 1;
+            payload[1] = REG_BAL_CTRL;
+            payload[2] = 1; // Also only expecting one byte
+            BMSUtil::sendData(payload, 3, false);
+            delay(2);
+            BMSUtil::getReply(buff, 30);
+        }
+    }
+}
+
 
 uint8_t BMSModule::getBalancingState(int cell)
 {

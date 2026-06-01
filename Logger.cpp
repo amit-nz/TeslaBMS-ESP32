@@ -27,6 +27,7 @@
 #include "Logger.h"
 
 Logger::LogLevel Logger::logLevel = Logger::Info;
+uint32_t Logger::lastLogTime = 0;
 
 /*
  * Output a debug message with a variable amount of parameters.
@@ -109,6 +110,9 @@ Logger::LogLevel Logger::getLogLevel() {
 /*
  * Return a timestamp when the last log entry was made.
  */
+uint32_t Logger::getLastLogTime() {
+    return lastLogTime;
+}
 
 /*
  * Returns if debug log level is enabled. This can be used in time critical
@@ -143,24 +147,25 @@ boolean Logger::isDebug() {
  * %T - prints the next parameter as boolean ('true' or 'false')
  */
 void Logger::log(LogLevel level, char *format, va_list args) {
-    SERIALCONSOLE.print(millis());
+    lastLogTime = millis();
+    SERIALCONSOLE.print(lastLogTime);
     SERIALCONSOLE.print(" - ");
 
     switch (level) {
     case Debug:
-        SERIALCONSOLE.print(F("DEBUG"));
+        SERIALCONSOLE.print("DEBUG");
         break;
     case Info:
-        SERIALCONSOLE.print(F("INFO"));
+        SERIALCONSOLE.print("INFO");
         break;
     case Warn:
-        SERIALCONSOLE.print(F("WARNING"));
+        SERIALCONSOLE.print("WARNING");
         break;
     case Error:
-        SERIALCONSOLE.print(F("ERROR"));
+        SERIALCONSOLE.print("ERROR");
         break;
     }
-    SERIALCONSOLE.print(F(": "));
+    SERIALCONSOLE.print(": ");
 
     logMessage(format, args);
 }
@@ -255,4 +260,3 @@ void Logger::logMessage(char *format, va_list args) {
     }
     SERIALCONSOLE.println();
 }
-

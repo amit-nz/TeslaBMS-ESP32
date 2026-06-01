@@ -31,6 +31,7 @@ public:
     bool isExisting();
     void setExists(bool ex);
     void balanceCells(float lowestCell);
+    void balanceCell(int cellNumber);
     uint8_t getBalancingState(int cell);
 
 private:
