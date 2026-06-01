@@ -24,8 +24,6 @@
 
  */
 
-#include <due_wire.h>
-#include <Wire_EEPROM.h>
 #include "SerialConsole.h"
 #include "Logger.h"
 #include "BMSModuleManager.h"
@@ -36,9 +34,17 @@ extern EEPROMSettings settings;
 extern BMSModuleManager bms;
 
 bool printPrettyDisplay;
+uint32_t prettyCounter;
+//int whichDisplay;
+
+bool printDisplay;      //true = print
 unsigned long displayPreviousMillis=0;
 
-int whichDisplay;
+#define NONE 0      //Constants to define which display is sent to the serial monitor
+#define SUMMARY 1
+#define DETAILS 2
+#define JSON 3
+byte whichDisplay;     //the variable to hold them
 
 SerialConsole::SerialConsole() {
     init();
@@ -48,25 +54,25 @@ void SerialConsole::init() {
     //State variables for serial console
     ptrBuffer = 0;
     state = STATE_ROOT_MENU;
-    loopcount=0;
-    cancel=false;
-    printPrettyDisplay = false;
-    //prettyCounter = 0;
-    whichDisplay = 2;
+    //loopcount=0;
+    //cancel=false;
+    printDisplay = false;
+    prettyCounter = 0;
+    whichDisplay = NONE;
 }
 
 void SerialConsole::loop() {
-     unsigned long currentMillis = millis();
-     int interval = 3000;
+    unsigned long currentMillis = millis();
+    unsigned long interval = 3000;
     if (SERIALCONSOLE.available()) {
         serialEvent();
     }
-    if (printPrettyDisplay && ((unsigned long)(currentMillis - displayPreviousMillis) >= interval))
+    if (printDisplay && ((currentMillis - displayPreviousMillis) >= interval))
     {
         displayPreviousMillis = currentMillis;
-        if (whichDisplay == 0) bms.printPackSummary();
-        if (whichDisplay == 1) bms.printPackDetails();
-        if (whichDisplay == 2) bms.jsonData();
+        if (whichDisplay == SUMMARY) bms.printPackSummary();
+        if (whichDisplay == DETAILS) bms.printPackDetails();
+        //if (whichDisplay == JSON) bms.jsonData();
     }
 }
 
@@ -82,13 +88,14 @@ void SerialConsole::printMenu() {
     Logger::console("   C = Clear all board faults");
     Logger::console("   F = Find all connected boards");
     Logger::console("   R = Renumber connected boards in sequence");
-    Logger::console("   B = Attempt balancing for 5 seconds");
+    Logger::console("   B = Manual start balancing");
+    Logger::console("   b = Manual stop balancing");
+    Logger::console("   1 to 6 = Toggle balancing on cell 1 to 6");
     Logger::console("   p = Toggle output of pack summary every 3 seconds");
     Logger::console("   d = Toggle output of pack details every 3 seconds");
+    Logger::console("   j = display JSON Data every 3 seconds, toggle off");
 
     Logger::console("   LOGLEVEL=%i - set log level (0=debug, 1=info, 2=warn, 3=error, 4=off)", Logger::getLogLevel());
-    Logger::console("   CANSPEED=%i - set first CAN bus speed", settings.canSpeed);
-    Logger::console("   BATTERYID=%i - Set battery ID for CAN protocol (1-14)", settings.batteryID);
 
     Logger::console("\nBATTERY MANAGEMENT CONTROLS\n");
     Logger::console("   VOLTLIMHI=%f - High limit for cells in volts", settings.OverVSetpoint);
@@ -97,6 +104,8 @@ void SerialConsole::printMenu() {
     Logger::console("   TEMPLIMLO=%f - Low limit for cell temperature in degrees C", settings.UnderTSetpoint);
     Logger::console("   BALVOLT=%f - Voltage at which to begin cell balancing", settings.balanceVoltage);
     Logger::console("   BALHYST=%f - How far voltage must dip before balancing is turned off", settings.balanceHyst);
+
+    Logger::console("   \nz = Restart the Board");
 
     float OverVSetpoint;
     float UnderVSetpoint;
@@ -211,7 +220,7 @@ void SerialConsole::handleConfigCmd() {
     } else if (cmdString == String("BATTERYID")) {
         if (newValue > 0 && newValue < 15) {
             settings.batteryID = newValue;
-            bms.setBatteryID();
+            //bms.setBatteryID();
             needEEPROMWrite = true;
             Logger::console("Battery ID set to: %i", newValue);
         }
@@ -263,7 +272,7 @@ void SerialConsole::handleConfigCmd() {
     }
     if (needEEPROMWrite)
     {
-        EEPROM.write(EEPROM_PAGE, settings);
+        //EEPROM.write(EEPROM_PAGE, settings);
     }
 }
 
@@ -271,79 +280,135 @@ void SerialConsole::handleShortCmd() {
     uint8_t val;
 
     switch (cmdBuffer[0]) {
-    case 'h':
-    case '?':
-    case 'H':
+    case 'h': case '?': case 'H':
         printMenu();
         break;
-    case 'S':
+    case 's': case 'S':
         Logger::console("Sleeping all connected boards");
         bms.sleepBoards();
         break;
-    case 'W':
+    case 'w': case 'W':
         Logger::console("Waking up all connected boards");
         bms.wakeBoards();
         break;
-    case 'C':
+    case 'c': case 'C':
         Logger::console("Clearing all faults");
         bms.clearFaults();
         break;
-    case 'F':
+    case 'f': case 'F':
+        Logger::console("Finding boards.");
         bms.findBoards();
         break;
-    case 'R':
+    case 'r': case 'R':
         Logger::console("Renumbering all boards.");
         bms.renumberBoardIDs();
         break;
-    case 'B':
+    case 'b': case 'B':
         bms.balanceCells();
         break;
-    case 'p':
-        if (whichDisplay == 1 && printPrettyDisplay) whichDisplay = 0;
+    case 'z':
+        Logger::console("Restart commanded");
+        esp_restart();
+        break;
+    case '1': case '2': case '3': case '4': case '5': case '6':
+        bms.balanceCell(cmdBuffer[0] - '0'); // Basically removing 48 to convert from ascii to int
+        break;
+    case 'p': case 'P':
+        if (whichDisplay == SUMMARY)//already displaying summary so toggle off
+        {
+            printDisplay = false;
+            whichDisplay = NONE;
+            Logger::console("No longer displaying pack summary");
+        }    
         else
         {
-            printPrettyDisplay = !printPrettyDisplay;
-            if (printPrettyDisplay)
-            {
-                Logger::console("Enabling pack summary display, 3 second interval");
-            }
-            else
-            {
-                Logger::console("No longer displaying pack summary.");
-            }
+            whichDisplay = SUMMARY;
+            printDisplay = true;
+            Logger::console("Enabling pack summary display");
         }
         break;
-    case 'd':
-        if (whichDisplay == 0 && printPrettyDisplay) whichDisplay = 1;
+    case 'd': case 'D':
+        if (whichDisplay == DETAILS)//already displaying details so toggle off
+        {
+            printDisplay = false;
+            whichDisplay = NONE;
+            Logger::console("No longer displaying pack details");
+        }
         else
         {
-            printPrettyDisplay = !printPrettyDisplay;
-            whichDisplay = 1;
-            if (printPrettyDisplay)
-            {
-                Logger::console("Enabling pack details display, 3 second interval");
-            }
-            else
-            {
-                Logger::console("No longer displaying pack details.");
-            }
+            whichDisplay = DETAILS;
+            printDisplay = true;
+            Logger::console("Enabling pack details display");
         }
         break;
-     case 'j':
-        if ((whichDisplay == 1 || whichDisplay == 0) && printPrettyDisplay) whichDisplay = 2;
+    case 'j': case 'J':
+        bms.printJsonData();
+        /* if(whichDisplay == JSON)//already displaying json so toggle off
+        {
+            printDisplay = false;
+            whichDisplay = NONE;
+            Logger::console("No longer displaying JSON details");
+        }
         else
         {
-            printPrettyDisplay = !printPrettyDisplay;
-            whichDisplay = 2;
-            if (printPrettyDisplay)
-            {
-                Logger::console("Enabling JSON display, 3 second interval");
-            }
-            else
-            {
-                Logger::console("No longer displaying JSON.");
-            }
-        }
+            whichDisplay = JSON;
+            printDisplay = true;
+            Logger::console("Enabling JSON display");
+        } */
         break;
     }
 }
+
+/*
+    if (SERIALCONSOLE.available()) 
+    {
+        char y = SERIALCONSOLE.read();
+        switch (y)
+        {
+        case '1': //ascii 1
+            renumberBoardIDs();  // force renumber and read out
+            break;
+        case '2': //ascii 2
+            SERIALCONSOLE.println();
+            findBoards();
+            break;
+        case '3': //activate cell balance for 5 seconds 
+            SERIALCONSOLE.println();
+            SERIALCONSOLE.println("Balancing");
+            cellBalance();
+            break;
+      case '4': //clear all faults on all boards, required after Reset or FPO (first power on)
+       SERIALCONSOLE.println();
+       SERIALCONSOLE.println("Clearing Faults");
+       clearFaults();
+      break;
+
+      case '5': //read out the status of first board
+       SERIALCONSOLE.println();
+       SERIALCONSOLE.println("Reading status");
+       readStatus(1);
+      break;
+
+      case '6': //Read out the limit setpoints of first board
+       SERIALCONSOLE.println();
+       SERIALCONSOLE.println("Reading Setpoints");
+       readSetpoint(1);
+       SERIALCONSOLE.println(OVolt);
+       SERIALCONSOLE.println(UVolt);
+       SERIALCONSOLE.println(Tset);
+      break; 
+
+      case '0': //Send all boards into Sleep state
+       Serial.println();
+       Serial.println("Sleep Mode");
+       sleepBoards();
+      break;
+
+      case '9'://Pull all boards out of Sleep state
+       Serial.println();
+       Serial.println("Wake Boards");
+       wakeBoards();
+      break;
+        }
+    }
+ */
